@@ -133,20 +133,27 @@ def preprocess_dataframe(_df, _stemmer, _stop_words):
     return df
 
 # EXACT NOTEBOOK WORKFLOW - Step 4: Load BERT Model and Generate Embeddings
+@st.cache_resource
 def load_and_generate_embeddings(df_processed):
     """EXACT copy from notebook - do it all in one step like the notebook"""
-    from sentence_transformers import SentenceTransformer
-
-    model = SentenceTransformer("BAAI/bge-small-en-v1.5")
-
-    embeddings = model.encode(df_processed['processed_text'].tolist(), convert_to_tensor=False)
-
-    df_processed['bert_embeddings'] = [row for row in embeddings]
-    
-    # Create df2 exactly like notebook
-    df2 = df_processed[['bert_embeddings', 'fraud_type']]
-    
-    return df2, embeddings, model
+    try:
+        from sentence_transformers import SentenceTransformer
+        model = SentenceTransformer("BAAI/bge-small-en-v1.5")
+        embeddings = model.encode(df_processed['processed_text'].tolist(), convert_to_tensor=False)
+        df_processed['bert_embeddings'] = [row for row in embeddings]
+        # Create df2 exactly like notebook
+        df2 = df_processed[['bert_embeddings', 'fraud_type']]
+        return df2, embeddings, model
+    except ImportError:
+        # Fallback to simple TF-IDF if BERT fails
+        st.warning("⚠️ BERT model unavailable, using TF-IDF fallback")
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        vectorizer = TfidfVectorizer(max_features=384, stop_words='english')
+        embeddings = vectorizer.fit_transform(df_processed['processed_text']).toarray()
+        df_processed['bert_embeddings'] = [row for row in embeddings]
+        # Create df2 exactly like notebook
+        df2 = df_processed[['bert_embeddings', 'fraud_type']]
+        return df2, embeddings, vectorizer
 
 # EXACT NOTEBOOK WORKFLOW - Step 5: Train XGBoost Model
 @st.cache_data
@@ -417,8 +424,12 @@ def main():
                 # 3. Create processed text (exact from notebook)
                 processed_text = ' '.join(tokens)
                 
-                # 4. Generate BERT embedding (exact from notebook)
-                embedding = st.session_state.bert_model.encode([processed_text], convert_to_tensor=False)
+                # 4. Generate embedding (BERT or TF-IDF fallback)
+                try:
+                    embedding = st.session_state.bert_model.encode([processed_text], convert_to_tensor=False)
+                except AttributeError:
+                    # TF-IDF fallback
+                    embedding = st.session_state.bert_model.transform([processed_text]).toarray()
                 
                 # 5. Predict using XGBoost (exact from notebook)
                 prediction = st.session_state.xgb_model.predict(embedding)[0]
